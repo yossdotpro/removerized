@@ -273,5 +273,5 @@ export const IDB_VERSION = 1
 
 export const INFERENCE_SIZE = 1024
 
-export const WASM_CDN_BASE =
-  "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.24.3/dist/"
+export const getWasmCdnBase = (version: string) =>
+  `https://cdn.jsdelivr.net/npm/onnxruntime-web@${version}/dist/`
