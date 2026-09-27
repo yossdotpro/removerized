@@ -73,8 +73,8 @@ This project focuses on:
 ## 🛠️ Getting Started
 
 ```bash
-pnpm install
-pnpm dev
+yarn install
+yarn dev
 ```
 
 ---
