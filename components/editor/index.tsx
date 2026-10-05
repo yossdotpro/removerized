@@ -381,6 +381,12 @@ export const Editor = ({ initialTool = "remover" }: EditorProps) => {
     }
   }, [queue, openDialog, onnx, colorizerModel, updateDialog, closeDialog])
 
+  const runActiveTool = useCallback(() => {
+    if (activeTool === "upscaler") return upscale()
+    if (activeTool === "colorizer") return colorize()
+    return process()
+  }, [activeTool, upscale, colorize, process])
+
   // Download
   const handleDownload = useCallback(async () => {
     if (activeTool === "upscaler" && upscaledData) {
@@ -466,14 +472,14 @@ export const Editor = ({ initialTool = "remover" }: EditorProps) => {
           handleZoomReset()
         } else if (e.key === "Enter") {
           e.preventDefault()
-          process()
+          runActiveTool()
         }
       }
     }
 
     globalThis.addEventListener("keydown", handleKeyDown)
     return () => globalThis.removeEventListener("keydown", handleKeyDown)
-  }, [handleZoomIn, handleZoomOut, handleZoomReset, process])
+  }, [handleZoomIn, handleZoomOut, handleZoomReset, runActiveTool])
 
   return (
     <div
@@ -543,7 +549,7 @@ export const Editor = ({ initialTool = "remover" }: EditorProps) => {
         />
         <EditorToolbar
           canDownload={canDownload}
-          onProcess={process}
+          onProcess={runActiveTool}
           onDownload={handleDownload}
           accentColor={accentColor}
           onZoomIn={handleZoomIn}
