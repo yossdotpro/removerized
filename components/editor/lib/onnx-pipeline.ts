@@ -1,90 +1,196 @@
-import { INFERENCE_SIZE, MODELS } from "../constants"
-import type { ModelKey } from "../types"
+import type { MaskOutputType, SegmentationConfig } from "../types"
 
 type Ort = typeof import("onnxruntime-web")
 
 // ── Pre-processing ────────────────────────────────────────────────────────────
 
+export interface MaskRegion {
+  x: number
+  y: number
+  width: number
+  height: number
+  inputWidth: number
+  inputHeight: number
+}
+
+const roundToMultiple = (value: number, multiple: number) =>
+  Math.max(multiple, Math.round(value / multiple) * multiple)
+
+const getMaskRegion = (
+  ow: number,
+  oh: number,
+  config: SegmentationConfig
+): MaskRegion => {
+  const { size, resize } = config
+  const multiple = config.multipleOf ?? 1
+
+  if (resize === "shortestEdge") {
+    const scale = size / Math.min(ow, oh)
+    const width = roundToMultiple(ow * scale, multiple)
+    const height = roundToMultiple(oh * scale, multiple)
+    return { x: 0, y: 0, width, height, inputWidth: width, inputHeight: height }
+  }
+
+  if (resize === "letterbox") {
+    const ratio = Math.min(size / ow, size / oh)
+    const width = Math.max(1, Math.round(ow * ratio))
+    const height = Math.max(1, Math.round(oh * ratio))
+    return {
+      x: Math.floor((size - width) / 2),
+      y: Math.floor((size - height) / 2),
+      width,
+      height,
+      inputWidth: size,
+      inputHeight: size,
+    }
+  }
+
+  return { x: 0, y: 0, width: size, height: size, inputWidth: size, inputHeight: size }
+}
+
 /**
  * Converts an HTMLImageElement into a normalised Float32 tensor ready for the
- * ONNX background-removal model.
+ * ONNX background-removal model described by `config`.
  *
  * Steps:
- *  1. Draw the image onto an offscreen canvas resized to INFERENCE_SIZE².
+ *  1. Resize the image according to the model's resize mode (stretch,
+ *     letterbox or shortest edge) on an offscreen canvas.
  *  2. Read the raw RGBA pixel buffer.
- *  3. Convert each channel to float, apply ImageNet mean/std normalisation.
+ *  3. Rescale each channel to [0, 1] and apply the model's mean/std.
  *  4. Arrange the result in CHW order (channel-height-width) as required by
  *     PyTorch-exported ONNX models.
  *
- * @param imgEl - The source image element (can be any natural size).
- * @returns     - An ort.Tensor with dtype "float32" and shape [1, 3, 1024, 1024].
+ * @param imgEl  - The source image element (can be any natural size).
+ * @param config - The model's segmentation configuration.
+ * @returns      - The input tensor and the region of it covered by the image.
  */
-export const preprocessImage = (imgEl: any, ort: Ort) => {
-  const S = INFERENCE_SIZE
+export const preprocessImage = (
+  imgEl: any,
+  ort: Ort,
+  config: SegmentationConfig
+) => {
+  const region = getMaskRegion(imgEl.naturalWidth, imgEl.naturalHeight, config)
+  const W = region.inputWidth
+  const H = region.inputHeight
 
   const canvas = (globalThis as any).document.createElement("canvas")
-  canvas.width = S
-  canvas.height = S
+  canvas.width = W
+  canvas.height = H
   const ctx = canvas.getContext("2d")!
 
-  const ratio = Math.min(S / imgEl.naturalWidth, S / imgEl.naturalHeight)
-  const newW = imgEl.naturalWidth * ratio
-  const newH = imgEl.naturalHeight * ratio
-  const dx = (S - newW) / 2
-  const dy = (S - newH) / 2
-
   ctx.fillStyle = "black"
-  ctx.fillRect(0, 0, S, S)
-  ctx.drawImage(imgEl, dx, dy, newW, newH)
+  ctx.fillRect(0, 0, W, H)
+  ctx.imageSmoothingEnabled = true
+  ctx.imageSmoothingQuality = "high"
+  ctx.drawImage(imgEl, region.x, region.y, region.width, region.height)
 
-  const { data } = ctx.getImageData(0, 0, S, S)
+  const { data } = ctx.getImageData(0, 0, W, H)
+  const { mean, std } = config
+  const plane = W * H
+  const float32 = new Float32Array(3 * plane)
 
-  const float32 = new Float32Array(3 * S * S)
-
-  for (let i = 0; i < S * S; i++) {
-    float32[i] = data[i * 4] / 255
-    float32[S * S + i] = data[i * 4 + 1] / 255
-    float32[S * S * 2 + i] = data[i * 4 + 2] / 255
+  for (let i = 0; i < plane; i++) {
+    float32[i] = (data[i * 4] / 255 - mean[0]) / std[0]
+    float32[plane + i] = (data[i * 4 + 1] / 255 - mean[1]) / std[1]
+    float32[plane * 2 + i] = (data[i * 4 + 2] / 255 - mean[2]) / std[2]
   }
 
-  return new ort.Tensor("float32", float32, [1, 3, S, S])
+  return { tensor: new ort.Tensor("float32", float32, [1, 3, H, W]), region }
 }
 
 // ── Post-processing ───────────────────────────────────────────────────────────
 
+const normalizeMask = (
+  raw: ArrayLike<number>,
+  output: MaskOutputType
+): Float32Array => {
+  const mask = new Float32Array(raw.length)
+
+  if (output === "logits") {
+    for (let i = 0; i < raw.length; i++) mask[i] = 1 / (1 + Math.exp(-raw[i]))
+    return mask
+  }
+
+  if (output === "minmax") {
+    let min = Infinity
+    let max = -Infinity
+    for (let i = 0; i < raw.length; i++) {
+      if (raw[i] < min) min = raw[i]
+      if (raw[i] > max) max = raw[i]
+    }
+    const range = max - min || 1
+    for (let i = 0; i < raw.length; i++) mask[i] = (raw[i] - min) / range
+    return mask
+  }
+
+  for (let i = 0; i < raw.length; i++) mask[i] = Math.min(1, Math.max(0, raw[i]))
+  return mask
+}
+
+const bilinearAxis = (
+  outSize: number,
+  start: number,
+  span: number,
+  maskSize: number
+) => {
+  const i0 = new Int32Array(outSize)
+  const i1 = new Int32Array(outSize)
+  const frac = new Float32Array(outSize)
+  const scale = span / outSize
+
+  for (let i = 0; i < outSize; i++) {
+    const pos = Math.min(
+      maskSize - 1,
+      Math.max(0, start + (i + 0.5) * scale - 0.5)
+    )
+    const lo = Math.floor(pos)
+    i0[i] = lo
+    i1[i] = Math.min(maskSize - 1, lo + 1)
+    frac[i] = pos - lo
+  }
+
+  return { i0, i1, frac }
+}
+
 /**
- * Composites the model's foreground-probability mask onto the original image
- * as an alpha channel, producing a transparent PNG Blob.
+ * Composites the model's foreground mask onto the original image as an alpha
+ * channel, producing a transparent WebP Blob.
  *
  * Steps:
- *  1. Read the flat Float32 mask from the output tensor (shape [1,1,H,W]).
- *  2. Clamp each value to [0, 1] and convert to uint8 grayscale ImageData.
- *  3. Paint the grayscale mask on a canvas at the model's output resolution.
- *  4. Scale the mask canvas to the original image's natural dimensions using
- *     drawImage bilinear interpolation.
- *  5. Draw the original image on a result canvas.
- *  6. For every pixel, replace the alpha byte with the corresponding mask
- *     value (R channel of the resized mask).
- *  7. Export to PNG via `canvas.toBlob`.
+ *  1. Convert the raw output tensor (shape [1,1,H,W]) to a [0, 1] mask using
+ *     the model's output type (probabilities, logits or min-max).
+ *  2. Draw the original image on a canvas at its natural dimensions.
+ *  3. For every pixel, bilinearly sample the mask inside the region that the
+ *     image occupied in the model input and write it as the alpha byte.
+ *  4. Export via `canvas.toBlob`.
  *
- * @param maskTensor - The raw output tensor from session.run(), typically
- *                     shaped [1, 1, H, W] with values in [0, 1].
+ * @param maskTensor - The raw output tensor from session.run().
  * @param imgEl      - The original source image used to recover natural dimensions
  *                     and pixel data.
- * @returns          - A Promise resolving to a transparent PNG Blob.
+ * @param config     - The model's segmentation configuration.
+ * @param region     - The region returned by `preprocessImage`.
+ * @returns          - A Promise resolving to a transparent Blob.
  */
 export const applyMaskAsAlpha = (
   maskTensor: any,
   imgEl: any,
+  config: SegmentationConfig,
+  region: MaskRegion,
   quality: number = 0.9
 ): Promise<Blob> =>
   new Promise((resolve) => {
     const ow = imgEl.naturalWidth
     const oh = imgEl.naturalHeight
 
-    const mH = (maskTensor.dims[2] as number) ?? INFERENCE_SIZE
-    const mW = (maskTensor.dims[3] as number) ?? INFERENCE_SIZE
-    const maskData = maskTensor.data as Float32Array
+    const dims = maskTensor.dims as number[]
+    const mH = Number(dims[dims.length - 2])
+    const mW = Number(dims[dims.length - 1])
+    const mask = normalizeMask(maskTensor.data, config.output)
+
+    const sx = mW / region.inputWidth
+    const sy = mH / region.inputHeight
+    const cols = bilinearAxis(ow, region.x * sx, region.width * sx, mW)
+    const rows = bilinearAxis(oh, region.y * sy, region.height * sy, mH)
 
     const origCanvas = (globalThis as any).document.createElement("canvas")
     origCanvas.width = ow
@@ -93,35 +199,24 @@ export const applyMaskAsAlpha = (
     origCtx.drawImage(imgEl, 0, 0)
     const origPx = origCtx.getImageData(0, 0, ow, oh)
 
-    // Calculate ratio and offsets once outside the loop
-    const ratio = Math.min(mW / ow, mH / oh)
-    const newW = ow * ratio
-    const newH = oh * ratio
-    const dx = (mW - newW) / 2
-    const dy = (mH - newH) / 2
+    for (let y = 0; y < oh; y++) {
+      const top = rows.i0[y] * mW
+      const bottom = rows.i1[y] * mW
+      const fy = rows.frac[y]
 
-    for (let i = 0; i < ow * oh; i++) {
-      const x = i % ow
-      const y = Math.floor(i / ow)
+      for (let x = 0; x < ow; x++) {
+        const x0 = cols.i0[x]
+        const x1 = cols.i1[x]
+        const fx = cols.frac[x]
 
-      const mx = Math.floor(x * ratio + dx)
-      const my = Math.floor(y * ratio + dy)
+        const upper = mask[top + x0] + (mask[top + x1] - mask[top + x0]) * fx
+        const lower =
+          mask[bottom + x0] + (mask[bottom + x1] - mask[bottom + x0]) * fx
+        const value = upper + (lower - upper) * fy
 
-      // Out of mask bounds
-      if (mx < 0 || my < 0 || mx >= mW || my >= mH) {
-        origPx.data[i * 4 + 3] = 0
-        continue
+        const i = (y * ow + x) * 4 + 3
+        origPx.data[i] = Math.round(value * origPx.data[i])
       }
-
-      let maskValue = maskData[my * mW + mx]
-
-      // Apply sigmoid only if tensor contains raw logits instead of probabilities
-      if (maskValue < 0 || maskValue > 1) {
-        maskValue = 1 / (1 + Math.exp(-maskValue))
-      }
-
-      // Smooth alpha blending
-      origPx.data[i * 4 + 3] = Math.round(maskValue * 255)
     }
 
     const outCanvas = (globalThis as any).document.createElement("canvas")

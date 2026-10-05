@@ -31,3 +31,16 @@ export interface DialogState {
   text: string
   progress: number
 }
+
+export type ResizeMode = "letterbox" | "stretch" | "shortestEdge"
+
+export type MaskOutputType = "probabilities" | "logits" | "minmax"
+
+export interface SegmentationConfig {
+  size: number
+  multipleOf?: number
+  mean: [number, number, number]
+  std: [number, number, number]
+  resize: ResizeMode
+  output: MaskOutputType
+}

@@ -134,11 +134,19 @@ export const useOnnxSession = (
 
       const session = await getOrCreateSession(modelKey, onUpdate)
 
+      const { inputType, segmentation } = MODELS[modelKey]
+      if (!segmentation) {
+        throw new Error(`${modelKey} is not a segmentation model`)
+      }
+
       onUpdate("Pre-processing…", 0)
-      const inputTensor = preprocessImage(imgEl, ortRef.current)
+      const { tensor: inputTensor, region } = preprocessImage(
+        imgEl,
+        ortRef.current,
+        segmentation
+      )
 
       onUpdate("Running inference…", 0)
-      const inputType = MODELS[modelKey].inputType
       const results = await withTimeout(
         session.run({ [inputType]: inputTensor }),
         INFERENCE_TIMEOUT_MS,
@@ -147,7 +155,13 @@ export const useOnnxSession = (
 
       onUpdate("Post-processing…", 0)
       const maskTensor = results[session.outputNames[0]]
-      const blob = await applyMaskAsAlpha(maskTensor, imgEl, quality)
+      const blob = await applyMaskAsAlpha(
+        maskTensor,
+        imgEl,
+        segmentation,
+        region,
+        quality
+      )
 
       return blob
     },
