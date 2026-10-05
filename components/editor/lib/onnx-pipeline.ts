@@ -299,44 +299,133 @@ export const preprocessImageToImage = (
   return new ort.Tensor("float32", float32, [1, 3, height, width])
 }
 
-/**
- * Converts a [1, 3, H, W] tensor back into a PNG Blob.
- */
-export const tensorToImageData = (
-  tensor: any,
-  width: number,
-  height: number,
-  options: { valueMode?: "unit" | "byte"; quality?: number } = {}
-): Promise<Blob> =>
-  new Promise((resolve) => {
-    const { valueMode = "unit", quality = 0.9 } = options
-    const canvas = (globalThis as any).document.createElement("canvas")
-    canvas.width = width
-    canvas.height = height
-    const ctx = canvas.getContext("2d")!
-    const imageData = ctx.createImageData(width, height)
+const TILE_MULTIPLE = 8
 
-    const data = tensor.data as Float32Array
-    const size = width * height
-    const scale = valueMode === "byte" ? 1 : 255
+const MAX_UPSCALE_OUTPUT_PIXELS = 8192 * 8192
 
-    for (let i = 0; i < size; i++) {
-      imageData.data[i * 4] = Math.max(0, Math.min(255, data[i] * scale))
-      imageData.data[i * 4 + 1] = Math.max(
-        0,
-        Math.min(255, data[size + i] * scale)
-      )
-      imageData.data[i * 4 + 2] = Math.max(
-        0,
-        Math.min(255, data[size * 2 + i] * scale)
-      )
-      imageData.data[i * 4 + 3] = 255
+export interface TileOptions {
+  patchSize: number
+  padding: number
+}
+
+const readPixels = (imgEl: any, width: number, height: number) => {
+  const canvas = (globalThis as any).document.createElement("canvas")
+  canvas.width = width
+  canvas.height = height
+  const ctx = canvas.getContext("2d")!
+  ctx.imageSmoothingEnabled = true
+  ctx.imageSmoothingQuality = "high"
+  ctx.drawImage(imgEl, 0, 0, width, height)
+  return ctx.getImageData(0, 0, width, height).data as Uint8ClampedArray
+}
+
+const hasTransparency = (pixels: Uint8ClampedArray) => {
+  for (let i = 3; i < pixels.length; i += 4) {
+    if (pixels[i] < 255) return true
+  }
+  return false
+}
+
+export const upscaleTiled = async (
+  imgEl: any,
+  ort: Ort,
+  run: (tensor: any) => Promise<any>,
+  { patchSize, padding }: TileOptions,
+  onTile: (done: number, total: number) => void | Promise<void>,
+  quality: number = 0.9
+): Promise<Blob> => {
+  const W = imgEl.naturalWidth
+  const H = imgEl.naturalHeight
+  const pixels = readPixels(imgEl, W, H)
+
+  const T =
+    Math.ceil((patchSize + padding * 2) / TILE_MULTIPLE) * TILE_MULTIPLE
+  const cols = Math.ceil(W / patchSize)
+  const rows = Math.ceil(H / patchSize)
+  const total = cols * rows
+
+  let scale = 0
+  let OW = 0
+  let OH = 0
+  let out: Uint8ClampedArray | null = null
+
+  await onTile(0, total)
+
+  for (let row = 0; row < rows; row++) {
+    for (let col = 0; col < cols; col++) {
+      const coreX = col * patchSize
+      const coreY = row * patchSize
+      const coreW = Math.min(patchSize, W - coreX)
+      const coreH = Math.min(patchSize, H - coreY)
+      const originX = coreX - padding
+      const originY = coreY - padding
+
+      const plane = T * T
+      const input = new Float32Array(3 * plane)
+      for (let ty = 0; ty < T; ty++) {
+        const sy = Math.min(H - 1, Math.max(0, originY + ty))
+        for (let tx = 0; tx < T; tx++) {
+          const sx = Math.min(W - 1, Math.max(0, originX + tx))
+          const src = (sy * W + sx) * 4
+          const dst = ty * T + tx
+          input[dst] = pixels[src] / 255
+          input[plane + dst] = pixels[src + 1] / 255
+          input[plane * 2 + dst] = pixels[src + 2] / 255
+        }
+      }
+
+      const output = await run(new ort.Tensor("float32", input, [1, 3, T, T]))
+      const outDims = output.dims as number[]
+      const outT = Number(outDims[outDims.length - 1])
+      const outPlane = outT * Number(outDims[outDims.length - 2])
+      const data = output.data as Float32Array
+
+      if (!out) {
+        scale = Math.round(outT / T)
+        OW = W * scale
+        OH = H * scale
+        if (OW * OH > MAX_UPSCALE_OUTPUT_PIXELS) {
+          throw new Error(
+            `Upscaled image would be ${OW}×${OH}, which exceeds the browser canvas limit.`
+          )
+        }
+        out = new Uint8ClampedArray(OW * OH * 4)
+      }
+
+      const offset = padding * scale
+      for (let oy = 0; oy < coreH * scale; oy++) {
+        const srcRow = (offset + oy) * outT + offset
+        const dstRow = ((coreY * scale + oy) * OW + coreX * scale) * 4
+        for (let ox = 0; ox < coreW * scale; ox++) {
+          const src = srcRow + ox
+          const dst = dstRow + ox * 4
+          out[dst] = data[src] * 255
+          out[dst + 1] = data[outPlane + src] * 255
+          out[dst + 2] = data[outPlane * 2 + src] * 255
+          out[dst + 3] = 255
+        }
+      }
+
+      await onTile(row * cols + col + 1, total)
     }
+  }
 
-    ctx.putImageData(imageData, 0, 0)
-    // Use WebP for better compression
+  if (hasTransparency(pixels)) {
+    const alpha = readPixels(imgEl, OW, OH)
+    for (let i = 3; i < out!.length; i += 4) out![i] = alpha[i]
+  }
+
+  const canvas = (globalThis as any).document.createElement("canvas")
+  canvas.width = OW
+  canvas.height = OH
+  canvas
+    .getContext("2d")!
+    .putImageData(new (globalThis as any).ImageData(out!, OW, OH), 0, 0)
+
+  return new Promise((resolve) =>
     canvas.toBlob((blob: any) => resolve(blob!), "image/webp", quality)
-  })
+  )
+}
 
 /**
  * Reuses the model output as low-resolution chroma and keeps the original

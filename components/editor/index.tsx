@@ -317,10 +317,7 @@ export const Editor = ({ initialTool = "remover" }: EditorProps) => {
         imgEl,
         upscalerModel,
         updateDialog,
-        {
-          size: 512,
-          quality: quality,
-        }
+        { quality, upscalerMode: upscalerSettings }
       )
       const url = URL.createObjectURL(blob)
 
@@ -338,7 +335,15 @@ export const Editor = ({ initialTool = "remover" }: EditorProps) => {
     } finally {
       closeDialog()
     }
-  }, [queue, openDialog, onnx, upscalerModel, updateDialog, closeDialog])
+  }, [
+    queue,
+    openDialog,
+    onnx,
+    upscalerModel,
+    upscalerSettings,
+    updateDialog,
+    closeDialog,
+  ])
 
   // Colorize
   const colorize = useCallback(async () => {
@@ -356,7 +361,7 @@ export const Editor = ({ initialTool = "remover" }: EditorProps) => {
         imgEl,
         colorizerModel,
         updateDialog,
-        { size: 512, quality: quality }
+        { quality }
       )
       const url = URL.createObjectURL(blob)
 
