@@ -1,3 +1,4 @@
+import { KarbonizedBanner } from "@/components/ads/karbonized-banner"
 import { Icons } from "@/components/icons"
 
 import { SEO_CONTENT, TOOL_ACCENTS } from "../../constants"
@@ -16,7 +17,7 @@ export const EditorLeftPanel = ({
 
   return (
     <div className="glass-panel flex h-full flex-col border-r border-white/[0.06] px-6 py-7">
-      <div className="flex flex-col gap-6 flex-1 min-h-0">
+      <div className="-mr-2 flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto pr-2">
         {/* Brand */}
         <div className="flex items-center gap-2.5 flex-shrink-0">
           <Icons.logo
@@ -70,9 +71,14 @@ export const EditorLeftPanel = ({
           ))}
         </ul>
 
+        {/* Karbonized promo */}
+        <div className="mt-auto flex-shrink-0">
+          <KarbonizedBanner />
+        </div>
+
         {/* Glow card */}
         <div
-          className="mt-auto rounded-xl border p-4 flex-shrink-0"
+          className="rounded-xl border p-4 flex-shrink-0"
           style={{
             borderColor: `${accentColor}25`,
             background: `linear-gradient(135deg, ${accentColor}08, transparent)`,
