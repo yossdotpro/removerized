@@ -317,10 +317,7 @@ export const Editor = ({ initialTool = "remover" }: EditorProps) => {
         imgEl,
         upscalerModel,
         updateDialog,
-        {
-          size: 512,
-          quality: quality,
-        }
+        { quality, upscalerMode: upscalerSettings }
       )
       const url = URL.createObjectURL(blob)
 
@@ -338,7 +335,15 @@ export const Editor = ({ initialTool = "remover" }: EditorProps) => {
     } finally {
       closeDialog()
     }
-  }, [queue, openDialog, onnx, upscalerModel, updateDialog, closeDialog])
+  }, [
+    queue,
+    openDialog,
+    onnx,
+    upscalerModel,
+    upscalerSettings,
+    updateDialog,
+    closeDialog,
+  ])
 
   // Colorize
   const colorize = useCallback(async () => {
@@ -356,7 +361,7 @@ export const Editor = ({ initialTool = "remover" }: EditorProps) => {
         imgEl,
         colorizerModel,
         updateDialog,
-        { size: 512, quality: quality }
+        { quality }
       )
       const url = URL.createObjectURL(blob)
 
@@ -375,6 +380,12 @@ export const Editor = ({ initialTool = "remover" }: EditorProps) => {
       closeDialog()
     }
   }, [queue, openDialog, onnx, colorizerModel, updateDialog, closeDialog])
+
+  const runActiveTool = useCallback(() => {
+    if (activeTool === "upscaler") return upscale()
+    if (activeTool === "colorizer") return colorize()
+    return process()
+  }, [activeTool, upscale, colorize, process])
 
   // Download
   const handleDownload = useCallback(async () => {
@@ -461,14 +472,14 @@ export const Editor = ({ initialTool = "remover" }: EditorProps) => {
           handleZoomReset()
         } else if (e.key === "Enter") {
           e.preventDefault()
-          process()
+          runActiveTool()
         }
       }
     }
 
     globalThis.addEventListener("keydown", handleKeyDown)
     return () => globalThis.removeEventListener("keydown", handleKeyDown)
-  }, [handleZoomIn, handleZoomOut, handleZoomReset, process])
+  }, [handleZoomIn, handleZoomOut, handleZoomReset, runActiveTool])
 
   return (
     <div
@@ -538,7 +549,7 @@ export const Editor = ({ initialTool = "remover" }: EditorProps) => {
         />
         <EditorToolbar
           canDownload={canDownload}
-          onProcess={process}
+          onProcess={runActiveTool}
           onDownload={handleDownload}
           accentColor={accentColor}
           onZoomIn={handleZoomIn}

@@ -1,4 +1,54 @@
-import type { ActiveTool, ModelKey, UpscalerModelKey } from "./types"
+import type {
+  ActiveTool,
+  ModelKey,
+  SegmentationConfig,
+  UpscalerModelKey,
+} from "./types"
+
+const IMAGENET_MEAN: [number, number, number] = [0.485, 0.456, 0.406]
+
+const IMAGENET_STD: [number, number, number] = [0.229, 0.224, 0.225]
+
+const ORMBG_SEGMENTATION: SegmentationConfig = {
+  size: 1024,
+  mean: [0, 0, 0],
+  std: [1, 1, 1],
+  resize: "stretch",
+  output: "probabilities",
+}
+
+const ISNET_SEGMENTATION: SegmentationConfig = {
+  size: 1024,
+  mean: [0.5, 0.5, 0.5],
+  std: [1, 1, 1],
+  resize: "stretch",
+  output: "probabilities",
+}
+
+const BIREFNET_SEGMENTATION: SegmentationConfig = {
+  size: 1024,
+  mean: IMAGENET_MEAN,
+  std: IMAGENET_STD,
+  resize: "stretch",
+  output: "logits",
+}
+
+const RMBG_SEGMENTATION: SegmentationConfig = {
+  size: 1024,
+  mean: [0.5, 0.5, 0.5],
+  std: [1, 1, 1],
+  resize: "stretch",
+  output: "minmax",
+}
+
+const MODNET_SEGMENTATION: SegmentationConfig = {
+  size: 512,
+  multipleOf: 32,
+  mean: [0.5, 0.5, 0.5],
+  std: [0.5, 0.5, 0.5],
+  resize: "shortestEdge",
+  output: "probabilities",
+}
 
 export const MODELS: Record<
   ModelKey,
@@ -14,6 +64,7 @@ export const MODELS: Record<
     author: string
     license: string
     inputType: string
+    segmentation?: SegmentationConfig
   }
 > = {
   ormbg_quantized: {
@@ -28,6 +79,7 @@ export const MODELS: Record<
     author: "ONNX Community",
     license: "Apache-2.0",
     inputType: "pixel_values",
+    segmentation: ORMBG_SEGMENTATION,
   },
   ormbg_fp16: {
     tool: "remover",
@@ -41,6 +93,7 @@ export const MODELS: Record<
     author: "ONNX Community",
     license: "Apache-2.0",
     inputType: "pixel_values",
+    segmentation: ORMBG_SEGMENTATION,
   },
   isnet_quantized: {
     tool: "remover",
@@ -54,6 +107,7 @@ export const MODELS: Record<
     author: "ONNX Community",
     license: "AGPL-3.0",
     inputType: "input",
+    segmentation: ISNET_SEGMENTATION,
   },
   isnet_fp16: {
     tool: "remover",
@@ -67,6 +121,7 @@ export const MODELS: Record<
     author: "ONNX Community",
     license: "AGPL-3.0",
     inputType: "input",
+    segmentation: ISNET_SEGMENTATION,
   },
   birefnet_lite: {
     tool: "remover",
@@ -80,6 +135,7 @@ export const MODELS: Record<
     author: "ONNX Community",
     license: "MIT",
     inputType: "input_image",
+    segmentation: BIREFNET_SEGMENTATION,
   },
   birefnet_lite_fp16: {
     tool: "remover",
@@ -93,6 +149,7 @@ export const MODELS: Record<
     author: "ONNX Community",
     license: "MIT",
     inputType: "input_image",
+    segmentation: BIREFNET_SEGMENTATION,
   },
   rmbg_1_4_quantized: {
     tool: "remover",
@@ -106,6 +163,7 @@ export const MODELS: Record<
     author: "Xenova / BRIA AI",
     license: "Non-Commercial",
     inputType: "pixel_values",
+    segmentation: RMBG_SEGMENTATION,
   },
   rmbg_1_4_fp16: {
     tool: "remover",
@@ -119,6 +177,7 @@ export const MODELS: Record<
     author: "Xenova / BRIA AI",
     license: "Non-Commercial",
     inputType: "pixel_values",
+    segmentation: RMBG_SEGMENTATION,
   },
   modnet_quantized: {
     tool: "remover",
@@ -132,6 +191,7 @@ export const MODELS: Record<
     author: "Xenova / ZHKKKe",
     license: "Apache-2.0",
     inputType: "pixel_values",
+    segmentation: MODNET_SEGMENTATION,
   },
   swin2sr_quantized: {
     tool: "upscaler",
@@ -270,8 +330,6 @@ export const IDB_NAME = "RemoverizerModelDB"
 export const IDB_STORE = "models"
 
 export const IDB_VERSION = 1
-
-export const INFERENCE_SIZE = 1024
 
 export const getWasmCdnBase = (version: string) =>
   `https://cdn.jsdelivr.net/npm/onnxruntime-web@${version}/dist/`
