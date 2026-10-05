@@ -3,10 +3,10 @@
 # dependencies
 node_modules
 .pnp
-.pnp.js
-yarn.lock
-.yarnrc.yml
+.pnp.*
 .yarn/
+package-lock.json
+pnpm-lock.yaml
 
 # testing
 coverage

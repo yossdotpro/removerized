@@ -17,7 +17,7 @@ import {
   MODELS,
   TOOL_ACCENTS,
   UPSCALER_MODELS,
-  WASM_CDN_BASE,
+  getWasmCdnBase,
 } from "./constants"
 import { useImageQueue } from "./hooks/use-image-queue"
 import { useOnnxSession } from "./hooks/use-onnx-session"
@@ -73,7 +73,9 @@ export const Editor = ({ initialTool = "remover" }: EditorProps) => {
     import("onnxruntime-web").then((ort) => {
       if (!mounted) return
 
-      ort.env.wasm.wasmPaths = WASM_CDN_BASE
+      ort.env.wasm.wasmPaths = getWasmCdnBase(
+        ort.env.versions.web ?? ort.env.versions.common
+      )
       ort.env.wasm.numThreads = 1
 
       ortRef.current = ort
